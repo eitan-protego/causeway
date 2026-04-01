@@ -1,0 +1,29 @@
+[build-system]
+requires = ["uv_build>=0.10.0,<0.11.0"]
+build-backend = "uv_build"
+
+[project]
+name = "mongo-migrations"
+version = "0.1.0"
+description = "MongoDB migration system for Python"
+requires-python = ">=3.12"
+dependencies = ["pydantic>=2.0", "pymongo>=4.0", "typed-mongo"]
+
+[tool.uv.sources]
+typed-mongo = { git = "https://github.com/eitan-protego/typed-mongo", subdirectory = "typed_mongo" }
+
+[dependency-groups]
+dev = ["basedpyright>=1.38.1", "pytest>=9.0.2", "ruff>=0.15.1", "mongomock-motor>=0.0.34", "pytest-asyncio>=1.0"]
+
+[tool.ruff.lint]
+ignore = ["ANN401"]
+
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib"
+asyncio_mode = "auto"
+
+[tool.pyright]
+reportExplicitAny = false
+reportAny = false
+reportUnusedCallResult = false
+reportUnusedClass = false
