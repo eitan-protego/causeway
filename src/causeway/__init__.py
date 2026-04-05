@@ -1,13 +1,13 @@
-"""MongoDB migration system.
+"""Database-agnostic migration system.
 
-Tracks migration state in a _migrations collection, discovers migration files
+Tracks migration state via a StateStore backend, discovers migration files
 by filename convention, and provides base classes for defining migration steps.
 """
 
 from causeway.base import MigrationStep
-from causeway.helpers import DocumentMigrationStep, IndexMigrationStep
 from causeway.runner import (
     MigrationStatus,
+    ResolvedStep,
     discover,
     load_version,
     migrate,
@@ -15,16 +15,19 @@ from causeway.runner import (
     stamp,
     status,
 )
+from causeway.state import MigrationHistoryEntry, MigrationState, StateStore
 
 __all__ = [
     "MigrationStep",
-    "DocumentMigrationStep",
-    "IndexMigrationStep",
+    "MigrationHistoryEntry",
+    "MigrationState",
+    "StateStore",
+    "MigrationStatus",
+    "ResolvedStep",
     "discover",
     "load_version",
     "migrate",
     "rollback",
     "stamp",
     "status",
-    "MigrationStatus",
 ]

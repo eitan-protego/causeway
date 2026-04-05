@@ -1,10 +1,11 @@
-"""Migration state tracking model stored in the _migrations collection."""
+"""Migration state models and StateStore protocol."""
 
 from datetime import UTC, datetime
-from typing import ClassVar, Literal
+from typing import Literal, Protocol, TypeVar
 
-import typed_mongo
 from pydantic import BaseModel, Field
+
+T = TypeVar("T", covariant=True)
 
 
 class MigrationHistoryEntry(BaseModel):
@@ -17,16 +18,12 @@ class MigrationHistoryEntry(BaseModel):
     applied_at: datetime
 
 
-class MigrationState(typed_mongo.MongoCollectionModel):
+class MigrationState(BaseModel):
     """Tracks the current migration position and execution history.
 
-    A single document per database with _id="state".
     version=0, step=0 means no migrations have been applied.
     """
 
-    __collection_name__: ClassVar[str] = "_migrations"
-
-    id: Literal["state"] = Field(alias="_id", default="state")
     version: int = 0
     step: int = 0
     history: list[MigrationHistoryEntry] = Field(default_factory=list)
@@ -42,3 +39,30 @@ class MigrationState(typed_mongo.MongoCollectionModel):
             direction=direction,
             applied_at=datetime.now(UTC),
         )
+
+
+class StateStore(Protocol[T]):
+    """Abstraction over migration state persistence.
+
+    Implementations hold the database instance (passed at construction)
+    and provide read/write access to migration state.
+    """
+
+    @property
+    def db(self) -> T:
+        """The underlying database instance."""
+        ...
+
+    async def read_state(self) -> MigrationState:
+        """Read current migration state. Returns default (v0/s0) if none exists."""
+        ...
+
+    async def update_state(
+        self, version: int, step: int, name: str, direction: Literal["up", "down"]
+    ) -> None:
+        """Record a migration step execution and update current position."""
+        ...
+
+    async def stamp_state(self, version: int, step: int) -> None:
+        """Forcibly set the migration position without recording history."""
+        ...

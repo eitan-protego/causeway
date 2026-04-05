@@ -1,4 +1,4 @@
-"""Helper subclasses of MigrationStep for common migration patterns."""
+"""MongoDB-specific migration step helpers."""
 
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar, override
@@ -7,8 +7,10 @@ from pymongo.asynchronous.database import AsyncDatabase
 
 from causeway.base import MigrationStep
 
+type MongoDb = AsyncDatabase[dict[str, Any]]
 
-class DocumentMigrationStep(MigrationStep, ABC):
+
+class DocumentMigrationStep(MigrationStep[MongoDb], ABC):
     """Iterate matching documents and apply a sync transform to each.
 
     Define collection_name, optionally query,
@@ -32,14 +34,14 @@ class DocumentMigrationStep(MigrationStep, ABC):
         """Transform a single document. Return the modified document."""
 
     @override
-    async def up(self, db: AsyncDatabase[dict[str, Any]]) -> None:
+    async def up(self, db: MongoDb) -> None:
         collection = db.get_collection(self.collection_name)
         async for doc in collection.find(self.query):
             transformed = self.transform(doc)
             await collection.replace_one({"_id": doc["_id"]}, transformed)
 
 
-class IndexMigrationStep(MigrationStep):
+class IndexMigrationStep(MigrationStep[MongoDb]):
     """Create an index on up(), drop it on down(). Both auto-implemented.
 
     Example:
@@ -56,7 +58,7 @@ class IndexMigrationStep(MigrationStep):
     index_name: ClassVar[str | None] = None
 
     @override
-    async def up(self, db: AsyncDatabase[dict[str, Any]]) -> None:
+    async def up(self, db: MongoDb) -> None:
         collection = db.get_collection(self.collection_name)
         kwargs: dict[str, Any] = {}
         if self.unique:
@@ -68,6 +70,6 @@ class IndexMigrationStep(MigrationStep):
         await collection.create_index(self.index, **kwargs)
 
     @override
-    async def down(self, db: AsyncDatabase[dict[str, Any]]) -> None:
+    async def down(self, db: MongoDb) -> None:
         collection = db.get_collection(self.collection_name)
         await collection.drop_index(self.index)

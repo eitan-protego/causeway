@@ -25,10 +25,14 @@ wheels = [
 
 [[package]]
 name = "causeway"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },
+]
+
+[package.optional-dependencies]
+mongodb = [
     { name = "pymongo" },
     { name = "typed-mongo" },
 ]
@@ -37,25 +41,30 @@ dependencies = [
 dev = [
     { name = "basedpyright" },
     { name = "mongomock-motor" },
+    { name = "pymongo" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
+    { name = "typed-mongo" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "pydantic", specifier = ">=2.0" },
-    { name = "pymongo", specifier = ">=4.0" },
-    { name = "typed-mongo", git = "https://github.com/eitan-protego/typed-mongo?subdirectory=typed_mongo" },
+    { name = "pymongo", marker = "extra == 'mongodb'", specifier = ">=4.0" },
+    { name = "typed-mongo", marker = "extra == 'mongodb'", git = "https://github.com/eitan-protego/typed-mongo?subdirectory=typed_mongo" },
 ]
+provides-extras = ["mongodb"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "basedpyright", specifier = ">=1.38.1" },
     { name = "mongomock-motor", specifier = ">=0.0.34" },
+    { name = "pymongo", specifier = ">=4.0" },
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "pytest-asyncio", specifier = ">=1.0" },
     { name = "ruff", specifier = ">=0.15.1" },
+    { name = "typed-mongo", git = "https://github.com/eitan-protego/typed-mongo?subdirectory=typed_mongo" },
 ]
 
 [[package]]

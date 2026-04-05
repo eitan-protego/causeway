@@ -1,16 +1,14 @@
 """Migration discovery and execution engine."""
 
 import importlib.util
+import logging
 import types
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from pymongo.asynchronous.database import AsyncDatabase
-
 from causeway.base import MigrationStep
-from causeway.state import MigrationHistoryEntry, MigrationState
-import logging
+from causeway.state import MigrationHistoryEntry, StateStore
 
 log = logging.getLogger(__name__)
 
@@ -21,7 +19,7 @@ class ResolvedStep:
 
     version: int
     step: int
-    cls: type[MigrationStep]
+    cls: type[MigrationStep[Any]]
 
     @property
     def name(self) -> str:
@@ -66,7 +64,7 @@ def discover(migrations_path: Path) -> list[ResolvedStep]:
     return steps
 
 
-def load_version(migrations_path: Path, version: int) -> list[type[MigrationStep]]:
+def load_version(migrations_path: Path, version: int) -> list[type[MigrationStep[Any]]]:
     """Load and return step classes for a specific migration version.
 
     Convenient for testing individual migrations::
@@ -79,14 +77,14 @@ def load_version(migrations_path: Path, version: int) -> list[type[MigrationStep
 
 
 async def migrate(
-    db: AsyncDatabase[dict[str, Any]],
+    store: StateStore[Any],
     migrations_path: Path,
     target_version: int | None = None,
     dry_run: bool = False,
 ) -> None:
     """Apply pending migrations up to target_version (default: all available)."""
     steps = discover(migrations_path)
-    state = await _read_state(db)
+    state = await store.read_state()
 
     pending = _pending_steps(steps, state.version, state.step, target_version)
 
@@ -102,13 +100,13 @@ async def migrate(
 
         log.info(f"Applying migration {label}")
         instance = resolved.cls()
-        await instance.up(db)
-        await _update_state(db, resolved.version, resolved.step, resolved.name, "up")
+        await instance.up(store.db)
+        await store.update_state(resolved.version, resolved.step, resolved.name, "up")
         log.info(f"Applied migration {label}")
 
 
 async def rollback(
-    db: AsyncDatabase[dict[str, Any]],
+    store: StateStore[Any],
     migrations_path: Path,
     target_version: int,
     dry_run: bool = False,
@@ -118,7 +116,7 @@ async def rollback(
     Pre-validates that all steps to be rolled back have down() implementations.
     """
     steps = discover(migrations_path)
-    state = await _read_state(db)
+    state = await store.read_state()
 
     to_rollback = _rollback_steps(steps, state.version, state.step, target_version)
 
@@ -140,21 +138,21 @@ async def rollback(
 
         log.info(f"Rolling back migration {label}")
         instance = resolved.cls()
-        await instance.down(db)
+        await instance.down(store.db)
 
         # After rolling back, state = the step before this one
         prev = _step_before(steps, resolved)
-        await _update_state(db, prev[0], prev[1], resolved.name, "down")
+        await store.update_state(prev[0], prev[1], resolved.name, "down")
         log.info(f"Rolled back migration {label}")
 
 
 async def status(
-    db: AsyncDatabase[dict[str, Any]],
+    store: StateStore[Any],
     migrations_path: Path,
 ) -> MigrationStatus:
     """Return current migration state and list of pending steps."""
     steps = discover(migrations_path)
-    state = await _read_state(db)
+    state = await store.read_state()
     pending = _pending_steps(steps, state.version, state.step)
     return MigrationStatus(
         current_version=state.version,
@@ -165,7 +163,7 @@ async def status(
 
 
 async def stamp(
-    db: AsyncDatabase[dict[str, Any]],
+    store: StateStore[Any],
     migrations_path: Path,
     version: int,
     step: int | None = None,
@@ -176,12 +174,7 @@ async def stamp(
     version=0 resets to "no migrations applied".
     """
     if version == 0:
-        collection = MigrationState.get_collection(db)
-        await collection.update_one(
-            {"_id": "state"},
-            {"$set": {"version": 0, "step": 0}},
-            upsert=True,
-        )
+        await store.stamp_state(0, 0)
         log.info("Stamped migration state to v0 (no migrations)")
         return
 
@@ -201,14 +194,10 @@ async def stamp(
             )
         target = matching[0]
 
-    collection = MigrationState.get_collection(db)
-    await collection.update_one(
-        {"_id": "state"},
-        {"$set": {"version": target.version, "step": target.step}},
-        upsert=True,
-    )
+    await store.stamp_state(target.version, target.step)
     log.info(
-        f"Stamped migration state to v{target.version} step {target.step}: {target.name}"
+        f"Stamped migration state to v{target.version} step {target.step}: "
+        f"{target.name}"
     )
 
 
@@ -244,7 +233,7 @@ def _validate_versions(files: list[Path]) -> None:
 
 def _load_migration_module(file_path: Path) -> types.ModuleType:
     """Dynamically import a migration file and return the module."""
-    module_name = f"_mongo_migration_{file_path.stem}"
+    module_name = f"_causeway_migration_{file_path.stem}"
     spec = importlib.util.spec_from_file_location(module_name, file_path)
     if spec is None or spec.loader is None:
         raise ImportError(f"Cannot load migration file: {file_path}")
@@ -253,7 +242,7 @@ def _load_migration_module(file_path: Path) -> types.ModuleType:
     return module
 
 
-def _collect_steps(module: types.ModuleType) -> list[type[MigrationStep]]:
+def _collect_steps(module: types.ModuleType) -> list[type[MigrationStep[Any]]]:
     """Collect MigrationStep subclasses defined in a module, in definition order."""
     return [
         obj
@@ -262,40 +251,6 @@ def _collect_steps(module: types.ModuleType) -> list[type[MigrationStep]]:
         and issubclass(obj, MigrationStep)
         and obj.__module__ == module.__name__
     ]
-
-
-async def _read_state(db: AsyncDatabase[dict[str, Any]]) -> MigrationState:
-    """Read current migration state, creating the default if it doesn't exist."""
-    collection = MigrationState.get_collection(db)
-    doc = await collection.find_one({"_id": "state"})
-    if doc is None:
-        return MigrationState()
-    return MigrationState.model_validate(doc)
-
-
-async def _update_state(
-    db: AsyncDatabase[dict[str, Any]],
-    version: int,
-    step: int,
-    name: str,
-    direction: str,
-) -> None:
-    """Update migration state after a successful step."""
-    entry = MigrationState.make_history_entry(
-        version=version,
-        step=step,
-        name=name,
-        direction=direction,  # pyright: ignore[reportArgumentType]
-    )
-    collection = MigrationState.get_collection(db)
-    await collection.update_one(
-        {"_id": "state"},
-        {
-            "$set": {"version": version, "step": step},
-            "$push": {"history": entry.model_dump()},
-        },
-        upsert=True,
-    )
 
 
 def _pending_steps(

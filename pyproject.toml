@@ -4,16 +4,19 @@ build-backend = "uv_build"
 
 [project]
 name = "causeway"
-version = "0.1.0"
-description = "MongoDB migration system for Python"
+version = "0.2.0"
+description = "Database-agnostic migration system for Python"
 requires-python = ">=3.12"
-dependencies = ["pydantic>=2.0", "pymongo>=4.0", "typed-mongo"]
+dependencies = ["pydantic>=2.0"]
+
+[project.optional-dependencies]
+mongodb = ["pymongo>=4.0", "typed-mongo"]
 
 [tool.uv.sources]
 typed-mongo = { git = "https://github.com/eitan-protego/typed-mongo", subdirectory = "typed_mongo" }
 
 [dependency-groups]
-dev = ["basedpyright>=1.38.1", "pytest>=9.0.2", "ruff>=0.15.1", "mongomock-motor>=0.0.34", "pytest-asyncio>=1.0"]
+dev = ["basedpyright>=1.38.1", "pytest>=9.0.2", "ruff>=0.15.1", "mongomock-motor>=0.0.34", "pytest-asyncio>=1.0", "pymongo>=4.0", "typed-mongo"]
 
 [tool.ruff.lint]
 ignore = ["ANN401"]
@@ -27,3 +30,4 @@ reportExplicitAny = false
 reportAny = false
 reportUnusedCallResult = false
 reportUnusedClass = false
+reportImplicitStringConcatenation = false

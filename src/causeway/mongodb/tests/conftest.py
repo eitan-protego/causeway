@@ -1,4 +1,4 @@
-"""Test fixtures for the causeway module."""
+"""Test fixtures for the causeway MongoDB backend."""
 
 import uuid
 from collections.abc import AsyncGenerator
@@ -7,6 +7,8 @@ from typing import Any, cast
 import pytest
 from pymongo import AsyncMongoClient
 from pymongo.asynchronous.database import AsyncDatabase
+
+from causeway.mongodb import MongoStateStore
 
 
 @pytest.fixture
@@ -20,3 +22,8 @@ async def db() -> AsyncGenerator[AsyncDatabase[dict[str, Any]], None]:
     database = client.get_database(f"test_db_{uuid.uuid4().hex[:12]}")
     yield database
     await client.drop_database(database.name)
+
+
+@pytest.fixture
+def store(db: AsyncDatabase[dict[str, Any]]) -> MongoStateStore:
+    return MongoStateStore(db)

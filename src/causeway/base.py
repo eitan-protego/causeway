@@ -2,9 +2,9 @@
 
 import re
 from abc import ABC, abstractmethod
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Generic, TypeVar
 
-from pymongo.asynchronous.database import AsyncDatabase
+T = TypeVar("T")
 
 
 def class_name_to_words(name: str) -> str:
@@ -13,7 +13,7 @@ def class_name_to_words(name: str) -> str:
     return words.lower()
 
 
-class MigrationStep(ABC):
+class MigrationStep(ABC, Generic[T]):
     """Base class for all migration steps.
 
     The runner discovers subclasses by inspecting loaded migration modules
@@ -31,18 +31,19 @@ class MigrationStep(ABC):
         cls.name = class_name_to_words(cls.__name__)
 
     @abstractmethod
-    async def up(self, db: AsyncDatabase[dict[str, Any]]) -> None:
+    async def up(self, db: T) -> None:
         """Apply this migration step."""
 
     async def down(
         self,
-        db: AsyncDatabase[dict[str, Any]],  # pyright: ignore[reportUnusedParameter]
+        db: T,  # pyright: ignore[reportUnusedParameter]
     ) -> None:
         """Reverse this migration step. Override to support rollback."""
         raise NotImplementedError(
-            f"Migration '{self.name}' (v{self.version} step {self.step}) is irreversible"
+            f"Migration '{self.name}' (v{self.version} step {self.step}) "
+            "is irreversible"
         )
 
     def has_down(self) -> bool:
         """Whether this step has a real down() implementation."""
-        return type(self).down is not MigrationStep.down
+        return type(self).down is not MigrationStep.down  # pyright: ignore[reportUnknownMemberType]
