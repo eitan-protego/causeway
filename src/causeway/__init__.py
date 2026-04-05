@@ -4,9 +4,9 @@ Tracks migration state in a _migrations collection, discovers migration files
 by filename convention, and provides base classes for defining migration steps.
 """
 
-from mongo_migrations.base import MigrationStep
-from mongo_migrations.helpers import DocumentMigrationStep, IndexMigrationStep
-from mongo_migrations.runner import (
+from causeway.base import MigrationStep
+from causeway.helpers import DocumentMigrationStep, IndexMigrationStep
+from causeway.runner import (
     MigrationStatus,
     discover,
     load_version,

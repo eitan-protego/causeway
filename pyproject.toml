@@ -3,7 +3,7 @@ requires = ["uv_build>=0.10.0,<0.11.0"]
 build-backend = "uv_build"
 
 [project]
-name = "mongo-migrations"
+name = "causeway"
 version = "0.1.0"
 description = "MongoDB migration system for Python"
 requires-python = ">=3.12"

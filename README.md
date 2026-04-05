@@ -1,4 +1,4 @@
-# mongo_migrations
+# causeway
 
 A file-based migration system for MongoDB, built on [pymongo](https://pymongo.readthedocs.io/) async and [typed-mongo](https://github.com/eitan-protego/typed-mongo).
 
@@ -7,7 +7,7 @@ Inspired by Alembic's approach to SQL migrations, adapted for MongoDB's schema-f
 ## Installation
 
 ```bash
-uv add mongo-migrations@git+https://github.com/eitan-protego/mongo_migrations
+uv add causeway@git+https://github.com/eitan-protego/causeway
 ```
 
 ## Quick start
@@ -29,7 +29,7 @@ Each file is named `NNN_description.py` where `NNN` is a sequential version numb
 # 001_add_status_field.py
 from typing import Any, override
 from pymongo.asynchronous.database import AsyncDatabase
-from mongo_migrations import MigrationStep
+from causeway import MigrationStep
 
 class AddStatusField(MigrationStep):
     @override
@@ -50,7 +50,7 @@ class AddStatusField(MigrationStep):
 
 ```python
 from pathlib import Path
-from mongo_migrations import migrate, rollback, status
+from causeway import migrate, rollback, status
 
 MIGRATIONS_DIR = Path("my_app/migrations")
 
@@ -97,7 +97,7 @@ The class name is auto-converted to a human-readable name: `BackfillUserStates` 
 Iterates matching documents and applies a sync transform to each:
 
 ```python
-from mongo_migrations import DocumentMigrationStep
+from causeway import DocumentMigrationStep
 
 class NormalizeName(DocumentMigrationStep):
     collection_name: ClassVar[str] = "users"
@@ -113,7 +113,7 @@ class NormalizeName(DocumentMigrationStep):
 Creates an index on `up()`, drops it on `down()` — both auto-implemented:
 
 ```python
-from mongo_migrations import IndexMigrationStep
+from causeway import IndexMigrationStep
 
 class CaseStatusIndex(IndexMigrationStep):
     collection_name: ClassVar[str] = "cases"
@@ -136,7 +136,7 @@ Use `load_version()` to load step classes for unit testing:
 
 ```python
 from pathlib import Path
-from mongo_migrations import load_version
+from causeway import load_version
 
 MIGRATIONS_DIR = Path(__file__).parent.parent
 BackfillStep = load_version(MIGRATIONS_DIR, 1)[0]

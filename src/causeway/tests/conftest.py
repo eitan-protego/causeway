@@ -1,4 +1,4 @@
-"""Test fixtures for the mongo_migrations module."""
+"""Test fixtures for the causeway module."""
 
 import uuid
 from collections.abc import AsyncGenerator

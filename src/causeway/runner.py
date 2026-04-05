@@ -8,8 +8,8 @@ from typing import Any
 
 from pymongo.asynchronous.database import AsyncDatabase
 
-from mongo_migrations.base import MigrationStep
-from mongo_migrations.state import MigrationHistoryEntry, MigrationState
+from causeway.base import MigrationStep
+from causeway.state import MigrationHistoryEntry, MigrationState
 import logging
 
 log = logging.getLogger(__name__)

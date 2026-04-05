@@ -5,7 +5,7 @@ from typing import Any, ClassVar, override
 
 from pymongo.asynchronous.database import AsyncDatabase
 
-from mongo_migrations.base import MigrationStep
+from causeway.base import MigrationStep
 
 
 class DocumentMigrationStep(MigrationStep, ABC):

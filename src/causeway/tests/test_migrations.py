@@ -7,17 +7,17 @@ from typing import Any, override
 import pytest
 from pymongo.asynchronous.database import AsyncDatabase
 
-from mongo_migrations import (
+from causeway import (
     MigrationStep,
     migrate,
     rollback,
     status,
 )
-from mongo_migrations.runner import discover
-from mongo_migrations.state import MigrationState
+from causeway.runner import discover
+from causeway.state import MigrationState
 
 _STEP_IMPORTS = textwrap.dedent("""\
-    from mongo_migrations import MigrationStep
+    from causeway import MigrationStep
     from typing import Any
     from pymongo.asynchronous.database import AsyncDatabase
 """)
@@ -347,7 +347,7 @@ class TestDocumentMigrationStep:
         )
 
         content = textwrap.dedent("""\
-            from mongo_migrations.helpers import DocumentMigrationStep
+            from causeway.helpers import DocumentMigrationStep
             from typing import Any, ClassVar
 
             class BackfillStatus(DocumentMigrationStep):
@@ -373,7 +373,7 @@ class TestDocumentMigrationStep:
 
 class TestIndexMigrationStep:
     _INDEX_MIGRATION: str = textwrap.dedent("""\
-        from mongo_migrations.helpers import IndexMigrationStep
+        from causeway.helpers import IndexMigrationStep
         from typing import ClassVar
 
         class StatusIndex(IndexMigrationStep):
