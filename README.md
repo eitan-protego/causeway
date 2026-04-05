@@ -1,13 +1,17 @@
 # causeway
 
-A file-based migration system for MongoDB, built on [pymongo](https://pymongo.readthedocs.io/) async and [typed-mongo](https://github.com/eitan-protego/typed-mongo).
+A database-agnostic migration system for Python. Define migration steps as classes, track state via pluggable backends, and run forward/rollback migrations with version tracking.
 
-Inspired by Alembic's approach to SQL migrations, adapted for MongoDB's schema-free world — backfills, index changes, and document transforms with version tracking and rollback support.
+Ships with a [MongoDB backend](#mongodb-backend) built on [pymongo](https://pymongo.readthedocs.io/) async and [typed-mongo](https://github.com/eitan-protego/typed-mongo).
 
 ## Installation
 
 ```bash
+# Core only (bring your own StateStore)
 uv add causeway@git+https://github.com/eitan-protego/causeway
+
+# With MongoDB backend
+uv add "causeway[mongodb]@git+https://github.com/eitan-protego/causeway"
 ```
 
 ## Quick start
@@ -23,15 +27,17 @@ my_app/migrations/
 
 ### 2. Write a migration
 
-Each file is named `NNN_description.py` where `NNN` is a sequential version number starting from 1. Define one or more `MigrationStep` subclasses per file — each class is a step within that version, ordered by definition order.
+Each file is named `NNN_description.py` where `NNN` is a sequential version number starting from 1. Define one or more step subclasses per file — each class is a step within that version, ordered by definition order.
+
+`MigrationStep` is generic over the database type `T`. For MongoDB, use `MongoMigrationStep` from `causeway.mongodb`:
 
 ```python
 # 001_add_status_field.py
 from typing import Any, override
 from pymongo.asynchronous.database import AsyncDatabase
-from causeway import MigrationStep
+from causeway.mongodb import MongoMigrationStep
 
-class AddStatusField(MigrationStep):
+class AddStatusField(MongoMigrationStep):
     @override
     async def up(self, db: AsyncDatabase[dict[str, Any]]) -> None:
         await db.get_collection("cases").update_many(
@@ -48,56 +54,113 @@ class AddStatusField(MigrationStep):
 
 ### 3. Run migrations
 
+All runner functions take a `StateStore` instance (not a raw database object):
+
 ```python
 from pathlib import Path
 from causeway import migrate, rollback, status
+from causeway.mongodb import MongoStateStore
 
 MIGRATIONS_DIR = Path("my_app/migrations")
+store = MongoStateStore(db)  # wraps an AsyncDatabase instance
 
 # Apply all pending
-await migrate(db, MIGRATIONS_DIR)
+await migrate(store, MIGRATIONS_DIR)
 
 # Apply up to version 2
-await migrate(db, MIGRATIONS_DIR, target_version=2)
+await migrate(store, MIGRATIONS_DIR, target_version=2)
 
 # Preview without executing
-await migrate(db, MIGRATIONS_DIR, dry_run=True)
+await migrate(store, MIGRATIONS_DIR, dry_run=True)
 
 # Roll back to version 1 (version 1 steps remain applied)
-await rollback(db, MIGRATIONS_DIR, target_version=1)
+await rollback(store, MIGRATIONS_DIR, target_version=1)
 
 # Check current state
-result = await status(db, MIGRATIONS_DIR)
+result = await status(store, MIGRATIONS_DIR)
 print(f"At v{result.current_version}, {len(result.pending)} pending")
 ```
 
+## Architecture
+
+### Core (`causeway`)
+
+The core package is database-agnostic. It provides:
+
+- **`MigrationStep[T]`** — Abstract base class for migration steps, generic over database type `T`. Subclass it and implement `up(db: T)` and optionally `down(db: T)`.
+- **`StateStore[T]`** — Protocol that backends implement to persist migration state. Provides `db`, `read_state()`, `update_state()`, and `stamp_state()`.
+- **Runner functions** — `migrate()`, `rollback()`, `status()`, `stamp()`, `discover()`, `load_version()` — all operate on a `StateStore` instance.
+
+### Backends (`causeway.mongodb`, ...)
+
+Backend packages provide concrete `StateStore` implementations and typed step base classes. The MongoDB backend provides:
+
+- **`MongoStateStore`** — Stores state in a `_migrations` collection.
+- **`MongoMigrationStep`** — Type alias for `MigrationStep[AsyncDatabase[dict[str, Any]]]`.
+- **`DocumentMigrationStep`** — Iterates and transforms matching documents.
+- **`IndexMigrationStep`** — Creates/drops indexes declaratively.
+
 ## API
 
-### Core functions
+### Runner functions
 
 | Function | Description |
 |---|---|
-| `migrate(db, path, target_version=None, dry_run=False)` | Apply pending migrations up to `target_version` (default: all) |
-| `rollback(db, path, target_version, dry_run=False)` | Roll back to `target_version` (that version's steps remain applied) |
-| `status(db, path)` | Return current version, step, pending steps, and history |
-| `stamp(db, path, version, step=None)` | Set migration state without running steps (use `version=0` to reset) |
+| `migrate(store, path, target_version=None, dry_run=False)` | Apply pending migrations up to `target_version` (default: all) |
+| `rollback(store, path, target_version, dry_run=False)` | Roll back to `target_version` (that version's steps remain applied) |
+| `status(store, path)` | Return current version, step, pending steps, and history |
+| `stamp(store, path, version, step=None)` | Set migration state without running steps (use `version=0` to reset) |
 | `discover(path)` | Discover and return all resolved steps from migration files |
 | `load_version(path, version)` | Load step classes for a specific version (useful in tests) |
 
-### Base classes
+### StateStore protocol
 
-#### `MigrationStep`
+Implement this protocol to add support for a new database:
+
+```python
+from causeway import StateStore, MigrationState
+
+class MyStateStore:
+    def __init__(self, db: MyDbType) -> None:
+        self._db = db
+
+    @property
+    def db(self) -> MyDbType:
+        return self._db
+
+    async def read_state(self) -> MigrationState:
+        """Read current state. Return default MigrationState() if none exists."""
+        ...
+
+    async def update_state(self, version: int, step: int, name: str, direction: Literal["up", "down"]) -> None:
+        """Record a step execution and update current position."""
+        ...
+
+    async def stamp_state(self, version: int, step: int) -> None:
+        """Set position without recording history."""
+        ...
+```
+
+### MigrationStep[T]
 
 The base class for all migrations. Implement `up()` (required) and optionally `down()` for rollback support. Steps without `down()` are marked irreversible and block rollback.
 
 The class name is auto-converted to a human-readable name: `BackfillUserStates` becomes "backfill user states".
 
-#### `DocumentMigrationStep`
+## MongoDB backend
+
+Install with the `mongodb` extra: `causeway[mongodb]`.
+
+### MongoMigrationStep
+
+Base class for MongoDB migrations — equivalent to `MigrationStep[AsyncDatabase[dict[str, Any]]]`.
+
+### DocumentMigrationStep
 
 Iterates matching documents and applies a sync transform to each:
 
 ```python
-from causeway import DocumentMigrationStep
+from causeway.mongodb import DocumentMigrationStep
 
 class NormalizeName(DocumentMigrationStep):
     collection_name: ClassVar[str] = "users"
@@ -108,12 +171,12 @@ class NormalizeName(DocumentMigrationStep):
         return doc
 ```
 
-#### `IndexMigrationStep`
+### IndexMigrationStep
 
 Creates an index on `up()`, drops it on `down()` — both auto-implemented:
 
 ```python
-from causeway import IndexMigrationStep
+from causeway.mongodb import IndexMigrationStep
 
 class CaseStatusIndex(IndexMigrationStep):
     collection_name: ClassVar[str] = "cases"
@@ -127,7 +190,7 @@ class CaseStatusIndex(IndexMigrationStep):
 
 - **Discovery**: Scans a directory for files matching `[0-9]*_*.py`, loads them dynamically, and collects `MigrationStep` subclasses in definition order.
 - **Versioning**: Version numbers must be sequential starting from 1 with no gaps or duplicates. Each file is one version; each class in the file is a step within that version.
-- **State tracking**: Migration state is stored in a `_migrations` collection as a single document (`_id: "state"`) containing the current version, step, and a full history log of all applied/rolled-back steps.
+- **State tracking**: Delegated to the `StateStore` backend. The MongoDB backend stores state in a `_migrations` collection as a single document (`_id: "state"`) with current version, step, and full history.
 - **Rollback safety**: Before executing any rollback, all steps to be rolled back are pre-validated for `down()` implementations. If any step is irreversible, the rollback is rejected before any changes are made.
 
 ## Testing migrations
