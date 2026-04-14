@@ -10,6 +10,7 @@ from causeway.registration import MigrationMetadata, register_migration
 from causeway.runner import (
     MigrationStatus,
     ResolvedStep,
+    create,
     discover,
     load_version,
     migrate,
@@ -27,6 +28,7 @@ __all__ = [
     "StateStore",
     "MigrationStatus",
     "ResolvedStep",
+    "create",
     "discover",
     "load_version",
     "migrate",

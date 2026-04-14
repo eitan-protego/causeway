@@ -1,5 +1,6 @@
 """Tests for the causeway runner using an in-memory StateStore."""
 
+import re
 import textwrap
 from pathlib import Path
 from typing import Any, Literal, override
@@ -7,7 +8,7 @@ from typing import Any, Literal, override
 import pytest
 
 from causeway import MigrationStep, migrate, rollback, stamp, status
-from causeway.runner import discover
+from causeway.runner import create, discover
 from causeway.state import MigrationState
 
 _STEP_IMPORTS = textwrap.dedent("""\
@@ -727,6 +728,89 @@ class TestStamp:
 
         state = await store.read_state()
         assert state.version == 0
+
+
+class TestCreate:
+    def test_creates_file_in_empty_directory(self, migrations_dir: Path) -> None:
+        path = create(migrations_dir, id="init", name="Initialize")
+
+        assert path.exists()
+        assert path.parent == migrations_dir
+        assert path.name.endswith("-init.py")
+        # Timestamp format: YYYY-mm-dd_HHMMSSZ
+        assert re.match(r"\d{4}-\d{2}-\d{2}_\d{6}Z-init\.py", path.name)
+
+        content = path.read_text()
+        assert "register_migration(" in content
+        assert 'id="init"' in content
+        assert "previous=None" in content
+        assert "next=None" in content
+        assert "Initialize" in content
+
+    def test_creates_file_with_auto_generated_id(self, migrations_dir: Path) -> None:
+        path = create(migrations_dir, name="Auto ID")
+
+        assert path.exists()
+        # Extract the id from the filename: timestamp-<id>.py
+        stem = path.stem
+        generated_id = stem.split("-", maxsplit=3)[-1]  # after YYYY-mm-dd_HHMMSSZ
+        assert re.fullmatch(r"[a-z0-9]{10}", generated_id)
+
+    def test_links_to_existing_tail(self, migrations_dir: Path) -> None:
+        _write_migration(
+            migrations_dir,
+            "first.py",
+            _step("pass", migration_id="first", previous=None, next=None, name="first"),
+        )
+
+        path = create(migrations_dir, id="second", name="Second migration")
+
+        content = path.read_text()
+        assert 'previous="first"' in content
+        assert "next=None" in content
+
+        # The old tail's next should be updated
+        old_content = (migrations_dir / "first.py").read_text()
+        assert 'next="second"' in old_content
+        assert "next=None" not in old_content
+
+    def test_chain_is_valid_after_create(self, migrations_dir: Path) -> None:
+        _write_migration(
+            migrations_dir,
+            "first.py",
+            _step("pass", migration_id="m1", previous=None, next=None, name="first"),
+        )
+
+        create(migrations_dir, id="m2", name="Second")
+
+        # discover() validates the full chain — should not raise
+        steps = discover(migrations_dir)
+        assert len(steps) == 2
+        assert [s.migration_id for s in steps] == ["m1", "m2"]
+
+    def test_creates_with_description(self, migrations_dir: Path) -> None:
+        path = create(
+            migrations_dir,
+            id="init",
+            name="Initialize",
+            description="Sets up initial schema.",
+        )
+
+        content = path.read_text()
+        assert "Initialize" in content
+        assert "Sets up initial schema." in content
+
+    def test_creates_with_no_name_gets_todo_docstring(
+        self, migrations_dir: Path
+    ) -> None:
+        path = create(migrations_dir, id="init")
+
+        content = path.read_text()
+        assert "TODO" in content
+
+    def test_raises_on_invalid_id(self, migrations_dir: Path) -> None:
+        with pytest.raises(ValueError, match="alphanumeric and dash"):
+            create(migrations_dir, id="bad id!")
 
 
 class TestStepRegistration:
