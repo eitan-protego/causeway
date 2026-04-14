@@ -1,10 +1,12 @@
 """Database-agnostic migration system.
 
 Tracks migration state via a StateStore backend, discovers migration files
-by filename convention, and provides base classes for defining migration steps.
+via register_migration() calls, and provides base classes for defining
+migration steps.
 """
 
 from causeway.base import MigrationStep
+from causeway.registration import MigrationMetadata, register_migration
 from causeway.runner import (
     MigrationStatus,
     ResolvedStep,
@@ -18,6 +20,7 @@ from causeway.runner import (
 from causeway.state import MigrationHistoryEntry, MigrationState, StateStore
 
 __all__ = [
+    "MigrationMetadata",
     "MigrationStep",
     "MigrationHistoryEntry",
     "MigrationState",
@@ -27,6 +30,7 @@ __all__ = [
     "discover",
     "load_version",
     "migrate",
+    "register_migration",
     "rollback",
     "stamp",
     "status",

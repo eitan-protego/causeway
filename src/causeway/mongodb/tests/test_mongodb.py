@@ -12,17 +12,39 @@ from causeway.mongodb import MongoStateStore
 from causeway.state import MigrationState
 
 _STEP_IMPORTS = textwrap.dedent("""\
-    from causeway import MigrationStep
+    from causeway import MigrationStep, register_migration
     from typing import Any
     from pymongo.asynchronous.database import AsyncDatabase
 """)
 
-_NOOP_STEP = _STEP_IMPORTS + textwrap.dedent("""\
 
+def _quote_or_none(val: str | None) -> str:
+    return f'"{val}"' if val is not None else "None"
+
+
+def _noop_migration(
+    migration_id: str,
+    previous: str | None = None,
+    next: str | None = None,
+    name: str | None = None,
+) -> str:
+    parts = [f'id="{migration_id}"']
+    if name is not None:
+        parts.append(f'name="{name}"')
+    else:
+        parts.append(f'name="{migration_id}"')
+    parts.append(f"previous={_quote_or_none(previous)}")
+    parts.append(f"next={_quote_or_none(next)}")
+    reg_call = f"register_migration({', '.join(parts)})"
+    return (
+        _STEP_IMPORTS
+        + f"\n{reg_call}\n"
+        + textwrap.dedent("""
     class Step(MigrationStep):
         async def up(self, db: AsyncDatabase[dict[str, Any]]) -> None:
             pass
-""")
+    """)
+    )
 
 
 @pytest.fixture
@@ -43,9 +65,18 @@ async def _get_state(db: AsyncDatabase[dict[str, Any]]) -> MigrationState:
     return MigrationState.model_validate(doc)
 
 
-def _step(body: str, cls_name: str = "Step") -> str:
+def _step(
+    body: str,
+    cls_name: str = "Step",
+    migration_id: str = "m1",
+    previous: str | None = None,
+    next: str | None = None,
+    name: str = "test",
+) -> str:
     return (
         _STEP_IMPORTS
+        + f'\nregister_migration(id="{migration_id}", name="{name}", '
+        + f"previous={_quote_or_none(previous)}, next={_quote_or_none(next)})\n"
         + f"""
 class {cls_name}(MigrationStep):
     async def up(self, db: AsyncDatabase[dict[str, Any]]) -> None:
@@ -54,9 +85,19 @@ class {cls_name}(MigrationStep):
     )
 
 
-def _reversible_step(up_body: str, down_body: str, cls_name: str = "Step") -> str:
+def _reversible_step(
+    up_body: str,
+    down_body: str,
+    cls_name: str = "Step",
+    migration_id: str = "m1",
+    previous: str | None = None,
+    next: str | None = None,
+    name: str = "test",
+) -> str:
     return (
         _STEP_IMPORTS
+        + f'\nregister_migration(id="{migration_id}", name="{name}", '
+        + f"previous={_quote_or_none(previous)}, next={_quote_or_none(next)})\n"
         + f"""
 class {cls_name}(MigrationStep):
     async def up(self, db: AsyncDatabase[dict[str, Any]]) -> None:
@@ -77,8 +118,14 @@ class TestMongoMigrate:
     ) -> None:
         _write_migration(
             migrations_dir,
-            "001_init.py",
-            _step('await db.get_collection("data").insert_one({"_id": "v1"})'),
+            "init.py",
+            _step(
+                'await db.get_collection("data").insert_one({"_id": "v1"})',
+                migration_id="init",
+                previous=None,
+                next=None,
+                name="init",
+            ),
         )
 
         await migrate(store, migrations_dir)
@@ -96,15 +143,30 @@ class TestMongoMigrate:
         store: MongoStateStore,
         migrations_dir: Path,
     ) -> None:
-        for v in [1, 2]:
-            _write_migration(
-                migrations_dir,
-                f"00{v}_migration.py",
-                _step(
-                    f'await db.get_collection("data").insert_one({{"_id": "v{v}"}})',
-                    cls_name=f"Step{v}",
-                ),
-            )
+        _write_migration(
+            migrations_dir,
+            "first.py",
+            _step(
+                'await db.get_collection("data").insert_one({"_id": "v1"})',
+                cls_name="Step1",
+                migration_id="m1",
+                previous=None,
+                next="m2",
+                name="first",
+            ),
+        )
+        _write_migration(
+            migrations_dir,
+            "second.py",
+            _step(
+                'await db.get_collection("data").insert_one({"_id": "v2"})',
+                cls_name="Step2",
+                migration_id="m2",
+                previous="m1",
+                next=None,
+                name="second",
+            ),
+        )
 
         await migrate(store, migrations_dir)
 
@@ -118,15 +180,42 @@ class TestMongoMigrate:
         store: MongoStateStore,
         migrations_dir: Path,
     ) -> None:
-        for v in range(1, 4):
-            _write_migration(
-                migrations_dir,
-                f"00{v}_migration.py",
-                _step(
-                    f'await db.get_collection("data").insert_one({{"_id": "v{v}"}})',
-                    cls_name=f"Step{v}",
-                ),
-            )
+        _write_migration(
+            migrations_dir,
+            "first.py",
+            _step(
+                'await db.get_collection("data").insert_one({"_id": "v1"})',
+                cls_name="Step1",
+                migration_id="m1",
+                previous=None,
+                next="m2",
+                name="first",
+            ),
+        )
+        _write_migration(
+            migrations_dir,
+            "second.py",
+            _step(
+                'await db.get_collection("data").insert_one({"_id": "v2"})',
+                cls_name="Step2",
+                migration_id="m2",
+                previous="m1",
+                next="m3",
+                name="second",
+            ),
+        )
+        _write_migration(
+            migrations_dir,
+            "third.py",
+            _step(
+                'await db.get_collection("data").insert_one({"_id": "v3"})',
+                cls_name="Step3",
+                migration_id="m3",
+                previous="m2",
+                next=None,
+                name="third",
+            ),
+        )
 
         await migrate(store, migrations_dir, target_version=2)
 
@@ -142,8 +231,14 @@ class TestMongoMigrate:
     ) -> None:
         _write_migration(
             migrations_dir,
-            "001_init.py",
-            _step('await db.get_collection("data").insert_one({"_id": "x"})'),
+            "init.py",
+            _step(
+                'await db.get_collection("data").insert_one({"_id": "x"})',
+                migration_id="init",
+                previous=None,
+                next=None,
+                name="init",
+            ),
         )
 
         await migrate(store, migrations_dir, dry_run=True)
@@ -160,16 +255,32 @@ class TestMongoRollback:
         store: MongoStateStore,
         migrations_dir: Path,
     ) -> None:
-        for v in [1, 2]:
-            _write_migration(
-                migrations_dir,
-                f"00{v}_migration.py",
-                _reversible_step(
-                    f'await db.get_collection("data").insert_one({{"_id": "v{v}"}})',
-                    f'await db.get_collection("data").delete_one({{"_id": "v{v}"}})',
-                    cls_name=f"Step{v}",
-                ),
-            )
+        _write_migration(
+            migrations_dir,
+            "first.py",
+            _reversible_step(
+                'await db.get_collection("data").insert_one({"_id": "v1"})',
+                'await db.get_collection("data").delete_one({"_id": "v1"})',
+                cls_name="Step1",
+                migration_id="m1",
+                previous=None,
+                next="m2",
+                name="first",
+            ),
+        )
+        _write_migration(
+            migrations_dir,
+            "second.py",
+            _reversible_step(
+                'await db.get_collection("data").insert_one({"_id": "v2"})',
+                'await db.get_collection("data").delete_one({"_id": "v2"})',
+                cls_name="Step2",
+                migration_id="m2",
+                previous="m1",
+                next=None,
+                name="second",
+            ),
+        )
 
         await migrate(store, migrations_dir)
         assert await db.get_collection("data").count_documents({}) == 2
@@ -188,7 +299,11 @@ class TestMongoStamp:
         store: MongoStateStore,
         migrations_dir: Path,
     ) -> None:
-        _write_migration(migrations_dir, "001_init.py", _NOOP_STEP)
+        _write_migration(
+            migrations_dir,
+            "init.py",
+            _noop_migration("init", previous=None, next=None),
+        )
 
         await stamp(store, migrations_dir, version=1)
 
@@ -201,7 +316,11 @@ class TestMongoStamp:
         store: MongoStateStore,
         migrations_dir: Path,
     ) -> None:
-        _write_migration(migrations_dir, "001_init.py", _NOOP_STEP)
+        _write_migration(
+            migrations_dir,
+            "init.py",
+            _noop_migration("init", previous=None, next=None),
+        )
         await migrate(store, migrations_dir)
 
         await stamp(store, migrations_dir, version=0)
@@ -214,7 +333,11 @@ class TestMongoStatus:
     async def test_returns_pending(
         self, store: MongoStateStore, migrations_dir: Path
     ) -> None:
-        _write_migration(migrations_dir, "001_init.py", _NOOP_STEP)
+        _write_migration(
+            migrations_dir,
+            "init.py",
+            _noop_migration("init", previous=None, next=None),
+        )
 
         result = await status(store, migrations_dir)
 
@@ -239,8 +362,11 @@ class TestDocumentMigrationStep:
         )
 
         content = textwrap.dedent("""\
+            from causeway import register_migration
             from causeway.mongodb.helpers import DocumentMigrationStep
             from typing import Any, ClassVar
+
+            register_migration(id="backfill", name="backfill status", previous=None, next=None)
 
             class BackfillStatus(DocumentMigrationStep):
                 collection_name: ClassVar[str] = "items"
@@ -250,7 +376,7 @@ class TestDocumentMigrationStep:
                     doc["status"] = "pending"
                     return doc
         """)
-        _write_migration(migrations_dir, "001_backfill.py", content)
+        _write_migration(migrations_dir, "backfill.py", content)
 
         await migrate(store, migrations_dir)
 
@@ -265,8 +391,11 @@ class TestDocumentMigrationStep:
 
 class TestIndexMigrationStep:
     _INDEX_MIGRATION: str = textwrap.dedent("""\
+        from causeway import register_migration
         from causeway.mongodb.helpers import IndexMigrationStep
         from typing import ClassVar
+
+        register_migration(id="indexes", name="status index", previous=None, next=None)
 
         class StatusIndex(IndexMigrationStep):
             collection_name: ClassVar[str] = "items"
@@ -279,7 +408,7 @@ class TestIndexMigrationStep:
         store: MongoStateStore,
         migrations_dir: Path,
     ) -> None:
-        _write_migration(migrations_dir, "001_indexes.py", self._INDEX_MIGRATION)
+        _write_migration(migrations_dir, "indexes.py", self._INDEX_MIGRATION)
 
         await migrate(store, migrations_dir)
 
@@ -293,7 +422,7 @@ class TestIndexMigrationStep:
         store: MongoStateStore,
         migrations_dir: Path,
     ) -> None:
-        _write_migration(migrations_dir, "001_indexes.py", self._INDEX_MIGRATION)
+        _write_migration(migrations_dir, "indexes.py", self._INDEX_MIGRATION)
 
         await migrate(store, migrations_dir)
         await rollback(store, migrations_dir, target_version=0)

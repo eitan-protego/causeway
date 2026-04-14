@@ -1,11 +1,9 @@
 """Migration state models and StateStore protocol."""
 
 from datetime import UTC, datetime
-from typing import Literal, Protocol, TypeVar
+from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field
-
-T = TypeVar("T", covariant=True)
 
 
 class MigrationHistoryEntry(BaseModel):
@@ -41,7 +39,7 @@ class MigrationState(BaseModel):
         )
 
 
-class StateStore(Protocol[T]):
+class StateStore[T](Protocol):
     """Abstraction over migration state persistence.
 
     Implementations hold the database instance (passed at construction)

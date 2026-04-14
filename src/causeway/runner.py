@@ -8,9 +8,19 @@ from pathlib import Path
 from typing import Any
 
 from causeway.base import MigrationStep
+from causeway.registration import MigrationMetadata, migration_loading_context
 from causeway.state import MigrationHistoryEntry, StateStore
 
 log = logging.getLogger(__name__)
+
+
+@dataclass
+class LoadedMigration:
+    """A migration loaded from a file, before ordering."""
+
+    metadata: MigrationMetadata
+    steps: list[type[MigrationStep[Any]]]
+    file_path: Path
 
 
 @dataclass
@@ -19,6 +29,7 @@ class ResolvedStep:
 
     version: int
     step: int
+    migration_id: str
     cls: type[MigrationStep[Any]]
 
     @property
@@ -39,33 +50,39 @@ class MigrationStatus:
 def discover(migrations_path: Path) -> list[ResolvedStep]:
     """Discover and load migration files, returning resolved steps in order.
 
-    Files must match the pattern NNN_description.py where NNN is the version number.
-    Steps within each file are ordered by class definition order.
+    Each migration file must call ``register_migration(...)`` exactly once.
+    The ``previous`` and ``next`` fields form a doubly-linked list that
+    determines execution order.
     """
     migration_files = sorted(
-        migrations_path.glob("[0-9]*_*.py"),
-        key=lambda f: _extract_version(f),
+        f for f in migrations_path.glob("*.py") if f.name != "__init__.py"
     )
 
-    _validate_versions(migration_files)
+    loaded = [_load_migration(f) for f in migration_files]
+    ordered = _assemble_migration_order(loaded)
 
     steps: list[ResolvedStep] = []
-
-    for file_path in migration_files:
-        version = _extract_version(file_path)
-        module = _load_migration_module(file_path)
-        file_steps = _collect_steps(module)
-
-        for step_num, step_cls in enumerate(file_steps, start=1):
+    for version, migration in enumerate(ordered, start=1):
+        for step_num, step_cls in enumerate(migration.steps, start=1):
             step_cls.version = version
             step_cls.step = step_num
-            steps.append(ResolvedStep(version=version, step=step_num, cls=step_cls))
+            steps.append(
+                ResolvedStep(
+                    version=version,
+                    step=step_num,
+                    migration_id=migration.metadata.id,
+                    cls=step_cls,
+                )
+            )
 
     return steps
 
 
 def load_version(migrations_path: Path, version: int) -> list[type[MigrationStep[Any]]]:
     """Load and return step classes for a specific migration version.
+
+    Version numbers are assigned based on position in the linked list
+    (1-indexed).
 
     Convenient for testing individual migrations::
 
@@ -204,31 +221,188 @@ async def stamp(
 # --- Internal helpers ---
 
 
-def _extract_version(file_path: Path) -> int:
-    """Extract version number from filename prefix: 001_description.py -> 1."""
-    stem = file_path.stem
-    prefix = stem.split("_", maxsplit=1)[0]
-    return int(prefix)
+def _load_migration(file_path: Path) -> LoadedMigration:
+    """Load a single migration file, capturing its registration and step classes."""
+    with migration_loading_context() as registered:
+        module = _load_migration_module(file_path)
 
-
-def _validate_versions(files: list[Path]) -> None:
-    """Validate version numbers are unique and sequential starting from 1."""
-    versions = [_extract_version(f) for f in files]
-    if not versions:
-        return
-
-    seen: set[int] = set()
-    for v in versions:
-        if v in seen:
-            raise ValueError(f"Duplicate migration version: {v}")
-        seen.add(v)
-
-    expected = list(range(1, max(versions) + 1))
-    if versions != expected:
-        missing = set(expected) - set(versions)
+    if len(registered) == 0:
         raise ValueError(
-            f"Non-sequential migration versions. Missing: {sorted(missing)}"
+            f"Migration file {file_path.name} did not call register_migration(). "
+            f"Each migration file must call causeway.register_migration(...) exactly once."
         )
+    if len(registered) > 1:
+        raise ValueError(
+            f"Migration file {file_path.name} called register_migration() "
+            f"{len(registered)} times. Each migration file must call it exactly once."
+        )
+
+    metadata = registered[0]
+    metadata = _auto_fill_metadata(metadata, module, file_path)
+    steps = _collect_steps(module)
+
+    return LoadedMigration(metadata=metadata, steps=steps, file_path=file_path)
+
+
+def _auto_fill_metadata(
+    metadata: MigrationMetadata, module: types.ModuleType, file_path: Path
+) -> MigrationMetadata:
+    """Auto-fill name and description from module docstring if not provided."""
+    updates: dict[str, str] = {}
+
+    if metadata.name is None:
+        docstring = module.__doc__
+        if not docstring:
+            raise ValueError(
+                f"Migration {metadata.id!r} ({file_path.name}) has no name and no "
+                f"module docstring. Either provide name= to register_migration() or "
+                f"add a module docstring."
+            )
+
+        # Strip leading newlines but preserve structure: a docstring whose
+        # first physical line (after the opening quotes) is blank counts as
+        # having an empty first line.
+        lines = docstring.split("\n")
+        # Find the first non-empty line
+        first_line = ""
+        first_line_idx = 0
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped:
+                first_line = stripped
+                first_line_idx = i
+                break
+
+        if not first_line:
+            raise ValueError(
+                f"Migration {metadata.id!r} ({file_path.name}) has no name and the "
+                f"module docstring has an empty first line. Either provide name= or "
+                f"ensure the docstring starts with a non-empty line."
+            )
+
+        # Only use the first non-empty line if it's the actual first line
+        # (possibly after one leading newline from triple-quote style)
+        if first_line_idx > 1:
+            raise ValueError(
+                f"Migration {metadata.id!r} ({file_path.name}) has no name and the "
+                f"module docstring has an empty first line. Either provide name= or "
+                f"ensure the docstring starts with a non-empty line."
+            )
+
+        updates["name"] = first_line
+
+        if metadata.description is None:
+            rest = "\n".join(lines[first_line_idx + 1 :]).strip()
+            if rest:
+                updates["description"] = rest
+
+    if updates:
+        return metadata.model_copy(update=updates)
+    return metadata
+
+
+def _assemble_migration_order(
+    loaded: list[LoadedMigration],
+) -> list[LoadedMigration]:
+    """Assemble loaded migrations into order using previous/next links.
+
+    Validates that they form a single valid doubly-linked list.
+    """
+    if not loaded:
+        return []
+
+    by_id: dict[str, LoadedMigration] = {}
+    for m in loaded:
+        if m.metadata.id in by_id:
+            existing = by_id[m.metadata.id]
+            raise ValueError(
+                f"Duplicate migration id {m.metadata.id!r}: "
+                f"found in {existing.file_path.name} and {m.file_path.name}"
+            )
+        by_id[m.metadata.id] = m
+
+    # Validate all referenced IDs exist
+    for m in loaded:
+        if m.metadata.previous is not None and m.metadata.previous not in by_id:
+            raise ValueError(
+                f"Migration {m.metadata.id!r} ({m.file_path.name}) references "
+                f"previous={m.metadata.previous!r} which does not exist"
+            )
+        if m.metadata.next is not None and m.metadata.next not in by_id:
+            raise ValueError(
+                f"Migration {m.metadata.id!r} ({m.file_path.name}) references "
+                f"next={m.metadata.next!r} which does not exist"
+            )
+
+    # Validate prev/next consistency
+    for m in loaded:
+        if m.metadata.next is not None:
+            next_m = by_id[m.metadata.next]
+            if next_m.metadata.previous != m.metadata.id:
+                raise ValueError(
+                    f"Inconsistent links: migration {m.metadata.id!r} "
+                    f"({m.file_path.name}) has next={m.metadata.next!r}, but "
+                    f"migration {next_m.metadata.id!r} ({next_m.file_path.name}) "
+                    f"has previous={next_m.metadata.previous!r}"
+                )
+        if m.metadata.previous is not None:
+            prev_m = by_id[m.metadata.previous]
+            if prev_m.metadata.next != m.metadata.id:
+                raise ValueError(
+                    f"Inconsistent links: migration {m.metadata.id!r} "
+                    f"({m.file_path.name}) has previous={m.metadata.previous!r}, but "
+                    f"migration {prev_m.metadata.id!r} ({prev_m.file_path.name}) "
+                    f"has next={prev_m.metadata.next!r}"
+                )
+
+    # Find head(s) — migrations with previous=None
+    heads = [m for m in loaded if m.metadata.previous is None]
+    if len(heads) == 0:
+        ids = [f"{m.metadata.id!r} ({m.file_path.name})" for m in loaded]
+        raise ValueError(
+            f"No initial migration found (all migrations have a previous link). "
+            f"This indicates a cycle among: {', '.join(ids)}"
+        )
+    if len(heads) > 1:
+        head_names = [f"{m.metadata.id!r} ({m.file_path.name})" for m in heads]
+        raise ValueError(
+            f"Multiple initial migrations (previous=None): "
+            f"{', '.join(head_names)}. "
+            f"There must be exactly one migration with previous=None."
+        )
+
+    # Walk the list from head to tail
+    ordered: list[LoadedMigration] = []
+    current: LoadedMigration | None = heads[0]
+    seen: set[str] = set()
+
+    while current is not None:
+        if current.metadata.id in seen:
+            raise ValueError(
+                f"Cycle detected: migration {current.metadata.id!r} "
+                f"({current.file_path.name}) was already visited"
+            )
+        seen.add(current.metadata.id)
+        ordered.append(current)
+
+        if current.metadata.next is not None:
+            current = by_id[current.metadata.next]
+        else:
+            current = None
+
+    # Check all migrations are reachable
+    if len(ordered) != len(loaded):
+        unreachable = [m for m in loaded if m.metadata.id not in seen]
+        unreachable_names = [
+            f"{m.metadata.id!r} ({m.file_path.name})" for m in unreachable
+        ]
+        raise ValueError(
+            f"Not all migrations are reachable from the initial migration. "
+            f"Unreachable: {', '.join(unreachable_names)}. "
+            f"These migrations form a separate chain."
+        )
+
+    return ordered
 
 
 def _load_migration_module(file_path: Path) -> types.ModuleType:
