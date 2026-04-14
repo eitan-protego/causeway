@@ -7,8 +7,7 @@ from typing import Any, Literal, override
 
 import pytest
 
-from causeway import MigrationStep, migrate, rollback, stamp, status
-from causeway.runner import create, discover
+from causeway import MigrationStep, create, discover, migrate, rollback, stamp, status
 from causeway.state import MigrationState
 
 _STEP_IMPORTS = textwrap.dedent("""\
