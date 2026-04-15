@@ -16,7 +16,16 @@ mongodb = ["pymongo>=4.0", "typed-mongo"]
 typed-mongo = { git = "https://github.com/eitan-protego/typed-mongo", subdirectory = "typed_mongo" }
 
 [dependency-groups]
-dev = ["basedpyright>=1.38.1", "pytest>=9.0.2", "ruff>=0.15.1", "mongomock-motor>=0.0.34", "pytest-asyncio>=1.0", "pymongo>=4.0", "typed-mongo"]
+dev = [
+    "basedpyright>=1.38.1",
+    "pytest>=9.0.2",
+    "ruff>=0.15.1",
+    "mongomock-motor>=0.0.34",
+    "pytest-asyncio>=1.0",
+    "pymongo>=4.0",
+    "typed-mongo",
+    "ast-grep-cli>=0.42.1",
+]
 
 [tool.ruff.lint]
 ignore = ["ANN401"]
