@@ -100,8 +100,7 @@ def _build_migration_file(
         parts.append('"""TODO: Add migration description."""')
 
     parts.append(
-        "from causeway import MigrationStep, register_migration\n"
-        "from typing import Any"
+        "from causeway import MigrationStep, register_migration\nfrom typing import Any"
     )
 
     # register_migration call
