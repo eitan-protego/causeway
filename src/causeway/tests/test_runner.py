@@ -69,17 +69,21 @@ class InMemoryStateStore:
         return self._state.model_copy()
 
     async def update_state(
-        self, version: int, step: int, name: str, direction: Literal["up", "down"]
+        self,
+        migration_id: str | None,
+        step: int,
+        name: str,
+        direction: Literal["up", "down"],
     ) -> None:
         entry = MigrationState.make_history_entry(
-            version=version, step=step, name=name, direction=direction
+            migration_id=migration_id, step=step, name=name, direction=direction
         )
-        self._state.version = version
+        self._state.migration_id = migration_id
         self._state.step = step
         self._state.history.append(entry)
 
-    async def stamp_state(self, version: int, step: int) -> None:
-        self._state.version = version
+    async def stamp_state(self, migration_id: str | None, step: int) -> None:
+        self._state.migration_id = migration_id
         self._state.step = step
 
 
@@ -162,7 +166,6 @@ class CreateUsersCollection(MigrationStep):
         steps = discover(migrations_dir)
 
         assert len(steps) == 1
-        assert steps[0].version == 1
         assert steps[0].step == 1
         assert steps[0].migration_id == "init"
         assert steps[0].name == "create users collection"
@@ -235,7 +238,6 @@ class StepTwo(MigrationStep):
 
         steps = discover(migrations_dir)
 
-        assert [s.version for s in steps] == [1, 2, 3]
         assert [s.migration_id for s in steps] == ["m1", "m2", "m3"]
 
     def test_raises_on_duplicate_migration_id(self, migrations_dir: Path) -> None:
@@ -481,10 +483,10 @@ class TestMigrate:
 
         assert len(store.db.get("data", [])) == 2
         state = await store.read_state()
-        assert state.version == 2
+        assert state.migration_id == "m2"
         assert len(state.history) == 2
 
-    async def test_stops_at_target_version(
+    async def test_stops_at_target(
         self, store: InMemoryStateStore, migrations_dir: Path
     ) -> None:
         _write_migration(
@@ -524,10 +526,10 @@ class TestMigrate:
             ),
         )
 
-        await migrate(store, migrations_dir, target_version=2)
+        await migrate(store, migrations_dir, target="m2")
 
         state = await store.read_state()
-        assert state.version == 2
+        assert state.migration_id == "m2"
         assert len(store.db.get("data", [])) == 2
 
     async def test_is_noop_when_already_at_latest(
@@ -565,7 +567,7 @@ class TestMigrate:
         await migrate(store, migrations_dir, dry_run=True)
 
         state = await store.read_state()
-        assert state.version == 0
+        assert state.migration_id is None
         assert store.db == {}
 
     async def test_stops_on_error_and_records_last_success(
@@ -590,7 +592,7 @@ class FailStep(MigrationStep):
             await migrate(store, migrations_dir)
 
         state = await store.read_state()
-        assert state.version == 1
+        assert state.migration_id == "init"
         assert state.step == 1
         assert len(state.history) == 1
 
@@ -629,11 +631,11 @@ class TestRollback:
         await migrate(store, migrations_dir)
         assert len(store.db["data"]) == 2
 
-        await rollback(store, migrations_dir, target_version=1)
+        await rollback(store, migrations_dir, target="m1")
 
         assert len(store.db["data"]) == 1
         state = await store.read_state()
-        assert state.version == 1
+        assert state.migration_id == "m1"
 
     async def test_raises_on_irreversible(
         self, store: InMemoryStateStore, migrations_dir: Path
@@ -652,7 +654,7 @@ class TestRollback:
         await migrate(store, migrations_dir)
 
         with pytest.raises(NotImplementedError, match="irreversible"):
-            await rollback(store, migrations_dir, target_version=0)
+            await rollback(store, migrations_dir, target=None)
 
     async def test_dry_run_does_not_roll_back(
         self, store: InMemoryStateStore, migrations_dir: Path
@@ -672,10 +674,10 @@ class TestRollback:
 
         await migrate(store, migrations_dir)
 
-        await rollback(store, migrations_dir, target_version=0, dry_run=True)
+        await rollback(store, migrations_dir, target=None, dry_run=True)
 
         state = await store.read_state()
-        assert state.version == 1
+        assert state.migration_id == "init"
         assert len(store.db["data"]) == 1
 
 
@@ -691,15 +693,15 @@ class TestStatus:
 
         result = await status(store, migrations_dir)
 
-        assert result.current_version == 0
+        assert result.current_migration_id is None
         assert result.current_step == 0
         assert len(result.pending) == 1
-        assert result.pending[0].version == 1
+        assert result.pending[0].migration_id == "init"
         assert result.history == []
 
 
 class TestStamp:
-    async def test_stamp_sets_version(
+    async def test_stamp_sets_migration(
         self, store: InMemoryStateStore, migrations_dir: Path
     ) -> None:
         _write_migration(
@@ -708,12 +710,12 @@ class TestStamp:
             _noop_migration("init", previous=None, next=None, name="init"),
         )
 
-        await stamp(store, migrations_dir, version=1)
+        await stamp(store, migrations_dir, migration_id="init")
 
         state = await store.read_state()
-        assert state.version == 1
+        assert state.migration_id == "init"
 
-    async def test_stamp_zero_resets(
+    async def test_stamp_none_resets(
         self, store: InMemoryStateStore, migrations_dir: Path
     ) -> None:
         _write_migration(
@@ -723,10 +725,10 @@ class TestStamp:
         )
         await migrate(store, migrations_dir)
 
-        await stamp(store, migrations_dir, version=0)
+        await stamp(store, migrations_dir, migration_id=None)
 
         state = await store.read_state()
-        assert state.version == 0
+        assert state.migration_id is None
 
 
 class TestCreate:

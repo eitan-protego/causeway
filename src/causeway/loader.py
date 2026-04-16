@@ -20,9 +20,8 @@ class LoadedMigration:
 
 @dataclass
 class ResolvedStep:
-    """A migration step with its assigned version and step number."""
+    """A migration step with its assigned step number within a migration."""
 
-    version: int
     step: int
     migration_id: str
     cls: type[MigrationStep[Any]]
@@ -43,13 +42,12 @@ def discover(migrations_path: Path) -> list[ResolvedStep]:
     ordered = assemble_migration_order(loaded)
 
     steps: list[ResolvedStep] = []
-    for version, migration in enumerate(ordered, start=1):
+    for migration in ordered:
         for step_num, step_cls in enumerate(migration.steps, start=1):
-            step_cls.version = version
+            step_cls.migration_id = migration.metadata.id
             step_cls.step = step_num
             steps.append(
                 ResolvedStep(
-                    version=version,
                     step=step_num,
                     migration_id=migration.metadata.id,
                     cls=step_cls,
@@ -59,19 +57,18 @@ def discover(migrations_path: Path) -> list[ResolvedStep]:
     return steps
 
 
-def load_version(migrations_path: Path, version: int) -> list[type[MigrationStep[Any]]]:
-    """Load and return step classes for a specific migration version.
-
-    Version numbers are assigned based on position in the linked list
-    (1-indexed).
+def load_migration_steps(
+    migrations_path: Path, migration_id: str
+) -> list[type[MigrationStep[Any]]]:
+    """Load and return step classes for a specific migration.
 
     Convenient for testing individual migrations::
 
-        steps = load_version(MIGRATIONS_DIR, 1)
+        steps = load_migration_steps(MIGRATIONS_DIR, "init")
         await steps[0]().up(db)
     """
     all_steps = discover(migrations_path)
-    return [s.cls for s in all_steps if s.version == version]
+    return [s.cls for s in all_steps if s.migration_id == migration_id]
 
 
 def load_all(migrations_path: Path) -> list[LoadedMigration]:

@@ -15,7 +15,7 @@ log = logging.getLogger(__name__)
 class MigrationStatus:
     """Current migration state and pending steps."""
 
-    current_version: int
+    current_migration_id: str | None
     current_step: int
     pending: list[ResolvedStep]
     history: list[MigrationHistoryEntry] = field(default_factory=list)
@@ -24,21 +24,21 @@ class MigrationStatus:
 async def migrate(
     store: StateStore[Any],
     migrations_path: Path,
-    target_version: int | None = None,
+    target: str | None = None,
     dry_run: bool = False,
 ) -> None:
-    """Apply pending migrations up to target_version (default: all available)."""
+    """Apply pending migrations up to target migration ID (default: all available)."""
     steps = discover(migrations_path)
     state = await store.read_state()
 
-    pending = _pending_steps(steps, state.version, state.step, target_version)
+    pending = _pending_steps(steps, state.migration_id, state.step, target)
 
     if not pending:
         log.info("No pending migrations")
         return
 
     for resolved in pending:
-        label = f"v{resolved.version} step {resolved.step}: {resolved.name}"
+        label = f"{resolved.migration_id} step {resolved.step}: {resolved.name}"
         if dry_run:
             log.info(f"[dry run] Would apply migration {label}")
             continue
@@ -46,24 +46,27 @@ async def migrate(
         log.info(f"Applying migration {label}")
         instance = resolved.cls()
         await instance.up(store.db)
-        await store.update_state(resolved.version, resolved.step, resolved.name, "up")
+        await store.update_state(
+            resolved.migration_id, resolved.step, resolved.name, "up"
+        )
         log.info(f"Applied migration {label}")
 
 
 async def rollback(
     store: StateStore[Any],
     migrations_path: Path,
-    target_version: int,
+    target: str | None,
     dry_run: bool = False,
 ) -> None:
-    """Roll back to target_version (inclusive — steps in target_version remain applied).
+    """Roll back to target migration ID (inclusive — steps in target remain applied).
 
+    Pass target=None to roll back all migrations.
     Pre-validates that all steps to be rolled back have down() implementations.
     """
     steps = discover(migrations_path)
     state = await store.read_state()
 
-    to_rollback = _rollback_steps(steps, state.version, state.step, target_version)
+    to_rollback = _rollback_steps(steps, state.migration_id, state.step, target)
 
     if not to_rollback:
         log.info("Nothing to roll back")
@@ -72,11 +75,13 @@ async def rollback(
     # Pre-validate all steps are reversible before executing any
     irreversible = [r for r in to_rollback if not r.cls().has_down()]
     if irreversible:
-        names = ", ".join(f"v{r.version} step {r.step}: {r.name}" for r in irreversible)
+        names = ", ".join(
+            f"{r.migration_id} step {r.step}: {r.name}" for r in irreversible
+        )
         raise NotImplementedError(f"Cannot roll back — irreversible steps: {names}")
 
     for resolved in to_rollback:
-        label = f"v{resolved.version} step {resolved.step}: {resolved.name}"
+        label = f"{resolved.migration_id} step {resolved.step}: {resolved.name}"
         if dry_run:
             log.info(f"[dry run] Would roll back migration {label}")
             continue
@@ -86,8 +91,8 @@ async def rollback(
         await instance.down(store.db)
 
         # After rolling back, state = the step before this one
-        prev = _step_before(steps, resolved)
-        await store.update_state(prev[0], prev[1], resolved.name, "down")
+        prev_id, prev_step = _step_before(steps, resolved)
+        await store.update_state(prev_id, prev_step, resolved.name, "down")
         log.info(f"Rolled back migration {label}")
 
 
@@ -98,9 +103,9 @@ async def status(
     """Return current migration state and list of pending steps."""
     steps = discover(migrations_path)
     state = await store.read_state()
-    pending = _pending_steps(steps, state.version, state.step)
+    pending = _pending_steps(steps, state.migration_id, state.step)
     return MigrationStatus(
-        current_version=state.version,
+        current_migration_id=state.migration_id,
         current_step=state.step,
         pending=pending,
         history=state.history,
@@ -110,38 +115,38 @@ async def status(
 async def stamp(
     store: StateStore[Any],
     migrations_path: Path,
-    version: int,
+    migration_id: str | None,
     step: int | None = None,
 ) -> None:
     """Forcibly set migration state without running any steps.
 
-    If step is None, sets to the last step of the given version.
-    version=0 resets to "no migrations applied".
+    If step is None, sets to the last step of the given migration.
+    migration_id=None resets to "no migrations applied".
     """
-    if version == 0:
-        await store.stamp_state(0, 0)
-        log.info("Stamped migration state to v0 (no migrations)")
+    if migration_id is None:
+        await store.stamp_state(None, 0)
+        log.info("Stamped migration state to None (no migrations)")
         return
 
     steps = discover(migrations_path)
-    version_steps = [s for s in steps if s.version == version]
-    if not version_steps:
-        raise ValueError(f"No migration found for version {version}")
+    migration_steps = [s for s in steps if s.migration_id == migration_id]
+    if not migration_steps:
+        raise ValueError(f"No migration found with id {migration_id!r}")
 
     if step is None:
-        target = version_steps[-1]
+        target = migration_steps[-1]
     else:
-        matching = [s for s in version_steps if s.step == step]
+        matching = [s for s in migration_steps if s.step == step]
         if not matching:
-            available = [s.step for s in version_steps]
+            available = [s.step for s in migration_steps]
             raise ValueError(
-                f"No step {step} in version {version}. Available: {available}"
+                f"No step {step} in migration {migration_id!r}. Available: {available}"
             )
         target = matching[0]
 
-    await store.stamp_state(target.version, target.step)
+    await store.stamp_state(target.migration_id, target.step)
     log.info(
-        f"Stamped migration state to v{target.version} step {target.step}: "
+        f"Stamped migration state to {target.migration_id} step {target.step}: "
         f"{target.name}"
     )
 
@@ -149,48 +154,78 @@ async def stamp(
 # --- Internal helpers ---
 
 
+def _find_current_index(
+    all_steps: list[ResolvedStep],
+    migration_id: str | None,
+    step: int,
+) -> int:
+    """Return the index of the current position in all_steps, or -1 if no migrations applied."""
+    if migration_id is None:
+        return -1
+    for i, s in enumerate(all_steps):
+        if s.migration_id == migration_id and s.step == step:
+            return i
+    return -1
+
+
+def _find_target_index(
+    all_steps: list[ResolvedStep],
+    target: str | None,
+) -> int:
+    """Return the index of the last step of the target migration, or -1 for None."""
+    if target is None:
+        return -1
+    for i in range(len(all_steps) - 1, -1, -1):
+        if all_steps[i].migration_id == target:
+            return i
+    raise ValueError(f"No migration found with id {target!r}")
+
+
 def _pending_steps(
     all_steps: list[ResolvedStep],
-    current_version: int,
+    current_migration_id: str | None,
     current_step: int,
-    target_version: int | None = None,
+    target: str | None = None,
 ) -> list[ResolvedStep]:
     """Filter steps that haven't been applied yet."""
-    pending = [
-        s for s in all_steps if (s.version, s.step) > (current_version, current_step)
-    ]
-    if target_version is not None:
-        pending = [s for s in pending if s.version <= target_version]
+    current_idx = _find_current_index(all_steps, current_migration_id, current_step)
+    pending = all_steps[current_idx + 1 :]
+    if target is not None:
+        target_idx = _find_target_index(all_steps, target)
+        # target_idx is absolute, convert to relative to pending start
+        max_count = target_idx - current_idx
+        pending = pending[:max_count]
     return pending
 
 
 def _rollback_steps(
     all_steps: list[ResolvedStep],
-    current_version: int,
+    current_migration_id: str | None,
     current_step: int,
-    target_version: int,
+    target: str | None,
 ) -> list[ResolvedStep]:
-    """Get steps to roll back (in reverse order) to reach target_version.
+    """Get steps to roll back (in reverse order) to reach target.
 
-    Rolls back all steps with version > target_version.
+    Rolls back all applied steps that come after the target migration.
     """
-    to_rollback = [
-        s
-        for s in all_steps
-        if (s.version, s.step) <= (current_version, current_step)
-        and s.version > target_version
-    ]
+    current_idx = _find_current_index(all_steps, current_migration_id, current_step)
+    if target is None:
+        target_idx = -1
+    else:
+        target_idx = _find_target_index(all_steps, target)
+
+    to_rollback = all_steps[target_idx + 1 : current_idx + 1]
     return list(reversed(to_rollback))
 
 
 def _step_before(
     all_steps: list[ResolvedStep], current: ResolvedStep
-) -> tuple[int, int]:
-    """Return (version, step) of the step before current, or (0, 0) if first."""
+) -> tuple[str | None, int]:
+    """Return (migration_id, step) of the step before current, or (None, 0) if first."""
     for i, s in enumerate(all_steps):
-        if s.version == current.version and s.step == current.step:
+        if s.migration_id == current.migration_id and s.step == current.step:
             if i == 0:
-                return (0, 0)
+                return (None, 0)
             prev = all_steps[i - 1]
-            return (prev.version, prev.step)
-    return (0, 0)
+            return (prev.migration_id, prev.step)
+    return (None, 0)

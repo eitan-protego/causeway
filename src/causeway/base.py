@@ -22,7 +22,7 @@ class MigrationStep(ABC, Generic[T]):
     Override up() (required) and optionally down() for rollback support.
     """
 
-    version: ClassVar[int]
+    migration_id: ClassVar[str]
     step: ClassVar[int]
     name: ClassVar[str]
 
@@ -40,7 +40,7 @@ class MigrationStep(ABC, Generic[T]):
     ) -> None:
         """Reverse this migration step. Override to support rollback."""
         raise NotImplementedError(
-            f"Migration '{self.name}' (v{self.version} step {self.step}) "
+            f"Migration '{self.name}' ({self.migration_id} step {self.step}) "
             "is irreversible"
         )
 

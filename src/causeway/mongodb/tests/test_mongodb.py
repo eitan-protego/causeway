@@ -131,7 +131,7 @@ class TestMongoMigrate:
         await migrate(store, migrations_dir)
 
         state = await _get_state(db)
-        assert state.version == 1
+        assert state.migration_id == "init"
         assert state.step == 1
         assert len(state.history) == 1
         assert state.history[0].direction == "up"
@@ -172,9 +172,9 @@ class TestMongoMigrate:
 
         assert await db.get_collection("data").count_documents({}) == 2
         state = await _get_state(db)
-        assert state.version == 2
+        assert state.migration_id == "m2"
 
-    async def test_stops_at_target_version(
+    async def test_stops_at_target(
         self,
         db: AsyncDatabase[dict[str, Any]],
         store: MongoStateStore,
@@ -217,10 +217,10 @@ class TestMongoMigrate:
             ),
         )
 
-        await migrate(store, migrations_dir, target_version=2)
+        await migrate(store, migrations_dir, target="m2")
 
         state = await _get_state(db)
-        assert state.version == 2
+        assert state.migration_id == "m2"
         assert await db.get_collection("data").count_documents({}) == 2
 
     async def test_dry_run(
@@ -285,11 +285,11 @@ class TestMongoRollback:
         await migrate(store, migrations_dir)
         assert await db.get_collection("data").count_documents({}) == 2
 
-        await rollback(store, migrations_dir, target_version=1)
+        await rollback(store, migrations_dir, target="m1")
 
         assert await db.get_collection("data").count_documents({}) == 1
         state = await _get_state(db)
-        assert state.version == 1
+        assert state.migration_id == "m1"
 
 
 class TestMongoStamp:
@@ -305,12 +305,12 @@ class TestMongoStamp:
             _noop_migration("init", previous=None, next=None),
         )
 
-        await stamp(store, migrations_dir, version=1)
+        await stamp(store, migrations_dir, migration_id="init")
 
         state = await _get_state(db)
-        assert state.version == 1
+        assert state.migration_id == "init"
 
-    async def test_stamp_zero_resets(
+    async def test_stamp_none_resets(
         self,
         db: AsyncDatabase[dict[str, Any]],
         store: MongoStateStore,
@@ -323,10 +323,10 @@ class TestMongoStamp:
         )
         await migrate(store, migrations_dir)
 
-        await stamp(store, migrations_dir, version=0)
+        await stamp(store, migrations_dir, migration_id=None)
 
         state = await _get_state(db)
-        assert state.version == 0
+        assert state.migration_id is None
 
 
 class TestMongoStatus:
@@ -341,7 +341,7 @@ class TestMongoStatus:
 
         result = await status(store, migrations_dir)
 
-        assert result.current_version == 0
+        assert result.current_migration_id is None
         assert len(result.pending) == 1
 
 
@@ -425,7 +425,7 @@ class TestIndexMigrationStep:
         _write_migration(migrations_dir, "indexes.py", self._INDEX_MIGRATION)
 
         await migrate(store, migrations_dir)
-        await rollback(store, migrations_dir, target_version=0)
+        await rollback(store, migrations_dir, target=None)
 
         indexes = await db.get_collection("items").index_information()
         index_keys = [v["key"] for v in indexes.values()]

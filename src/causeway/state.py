@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 class MigrationHistoryEntry(BaseModel):
     """Record of a single migration step execution."""
 
-    version: int
+    migration_id: str | None
     step: int
     name: str
     direction: Literal["up", "down"]
@@ -19,19 +19,19 @@ class MigrationHistoryEntry(BaseModel):
 class MigrationState(BaseModel):
     """Tracks the current migration position and execution history.
 
-    version=0, step=0 means no migrations have been applied.
+    migration_id=None, step=0 means no migrations have been applied.
     """
 
-    version: int = 0
+    migration_id: str | None = None
     step: int = 0
     history: list[MigrationHistoryEntry] = Field(default_factory=list)
 
     @staticmethod
     def make_history_entry(
-        version: int, step: int, name: str, direction: Literal["up", "down"]
+        migration_id: str | None, step: int, name: str, direction: Literal["up", "down"]
     ) -> MigrationHistoryEntry:
         return MigrationHistoryEntry(
-            version=version,
+            migration_id=migration_id,
             step=step,
             name=name,
             direction=direction,
@@ -52,15 +52,19 @@ class StateStore[T](Protocol):
         ...
 
     async def read_state(self) -> MigrationState:
-        """Read current migration state. Returns default (v0/s0) if none exists."""
+        """Read current migration state. Returns default if none exists."""
         ...
 
     async def update_state(
-        self, version: int, step: int, name: str, direction: Literal["up", "down"]
+        self,
+        migration_id: str | None,
+        step: int,
+        name: str,
+        direction: Literal["up", "down"],
     ) -> None:
         """Record a migration step execution and update current position."""
         ...
 
-    async def stamp_state(self, version: int, step: int) -> None:
+    async def stamp_state(self, migration_id: str | None, step: int) -> None:
         """Forcibly set the migration position without recording history."""
         ...

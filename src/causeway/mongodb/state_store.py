@@ -34,25 +34,29 @@ class MongoStateStore:
         return MigrationState.model_validate(doc)
 
     async def update_state(
-        self, version: int, step: int, name: str, direction: Literal["up", "down"]
+        self,
+        migration_id: str | None,
+        step: int,
+        name: str,
+        direction: Literal["up", "down"],
     ) -> None:
         entry = MigrationState.make_history_entry(
-            version=version, step=step, name=name, direction=direction
+            migration_id=migration_id, step=step, name=name, direction=direction
         )
         collection = self._db.get_collection(_COLLECTION_NAME)
         await collection.update_one(
             {"_id": "state"},
             {
-                "$set": {"version": version, "step": step},
+                "$set": {"migration_id": migration_id, "step": step},
                 "$push": {"history": entry.model_dump()},
             },
             upsert=True,
         )
 
-    async def stamp_state(self, version: int, step: int) -> None:
+    async def stamp_state(self, migration_id: str | None, step: int) -> None:
         collection = self._db.get_collection(_COLLECTION_NAME)
         await collection.update_one(
             {"_id": "state"},
-            {"$set": {"version": version, "step": step}},
+            {"$set": {"migration_id": migration_id, "step": step}},
             upsert=True,
         )
