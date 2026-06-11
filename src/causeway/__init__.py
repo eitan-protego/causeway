@@ -9,10 +9,19 @@ from causeway.base import MigrationStep
 from causeway.creator import create
 from causeway.loader import ResolvedStep, discover, load_migration_steps
 from causeway.registration import MigrationMetadata, register_migration
-from causeway.runner import MigrationStatus, migrate, rollback, stamp, status
+from causeway.runner import (
+    Logger,
+    MigrationStatus,
+    configure,
+    migrate,
+    rollback,
+    stamp,
+    status,
+)
 from causeway.state import MigrationHistoryEntry, MigrationState, StateStore
 
 __all__ = [
+    "Logger",
     "MigrationMetadata",
     "MigrationStep",
     "MigrationHistoryEntry",
@@ -20,6 +29,7 @@ __all__ = [
     "StateStore",
     "MigrationStatus",
     "ResolvedStep",
+    "configure",
     "create",
     "discover",
     "load_migration_steps",

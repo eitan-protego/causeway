@@ -3,12 +3,34 @@
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
+
 
 from causeway.loader import ResolvedStep, discover
 from causeway.state import MigrationHistoryEntry, StateStore
 
-log = logging.getLogger(__name__)
+
+@runtime_checkable
+class Logger(Protocol):
+    """Minimal logger interface compatible with stdlib logging and loguru."""
+
+    def debug(self, msg: str, *args: Any, **kwargs: Any) -> Any: ...
+    def info(self, msg: str, *args: Any, **kwargs: Any) -> Any: ...
+    def warning(self, msg: str, *args: Any, **kwargs: Any) -> Any: ...
+    def error(self, msg: str, *args: Any, **kwargs: Any) -> Any: ...
+
+
+_logger: Logger = logging.getLogger(__name__)
+
+
+def configure(*, logger: Logger) -> None:
+    """Set the logger used by causeway's migration runner.
+
+    Accepts any object with debug/info/warning/error methods (stdlib Logger,
+    loguru, structlog, etc.).
+    """
+    global _logger
+    _logger = logger
 
 
 @dataclass
@@ -34,22 +56,22 @@ async def migrate(
     pending = _pending_steps(steps, state.migration_id, state.step, target)
 
     if not pending:
-        log.info("No pending migrations")
+        _logger.info("No pending migrations")
         return
 
     for resolved in pending:
         label = f"{resolved.migration_id} step {resolved.step}: {resolved.name}"
         if dry_run:
-            log.info(f"[dry run] Would apply migration {label}")
+            _logger.info(f"[dry run] Would apply migration {label}")
             continue
 
-        log.info(f"Applying migration {label}")
+        _logger.info(f"Applying migration {label}")
         instance = resolved.cls()
         await instance.up(store.db)
         await store.update_state(
             resolved.migration_id, resolved.step, resolved.name, "up"
         )
-        log.info(f"Applied migration {label}")
+        _logger.info(f"Applied migration {label}")
 
 
 async def rollback(
@@ -69,7 +91,7 @@ async def rollback(
     to_rollback = _rollback_steps(steps, state.migration_id, state.step, target)
 
     if not to_rollback:
-        log.info("Nothing to roll back")
+        _logger.info("Nothing to roll back")
         return
 
     # Pre-validate all steps are reversible before executing any
@@ -83,17 +105,17 @@ async def rollback(
     for resolved in to_rollback:
         label = f"{resolved.migration_id} step {resolved.step}: {resolved.name}"
         if dry_run:
-            log.info(f"[dry run] Would roll back migration {label}")
+            _logger.info(f"[dry run] Would roll back migration {label}")
             continue
 
-        log.info(f"Rolling back migration {label}")
+        _logger.info(f"Rolling back migration {label}")
         instance = resolved.cls()
         await instance.down(store.db)
 
         # After rolling back, state = the step before this one
         prev_id, prev_step = _step_before(steps, resolved)
         await store.update_state(prev_id, prev_step, resolved.name, "down")
-        log.info(f"Rolled back migration {label}")
+        _logger.info(f"Rolled back migration {label}")
 
 
 async def status(
@@ -125,7 +147,7 @@ async def stamp(
     """
     if migration_id is None:
         await store.stamp_state(None, 0)
-        log.info("Stamped migration state to None (no migrations)")
+        _logger.info("Stamped migration state to None (no migrations)")
         return
 
     steps = discover(migrations_path)
@@ -145,7 +167,7 @@ async def stamp(
         target = matching[0]
 
     await store.stamp_state(target.migration_id, target.step)
-    log.info(
+    _logger.info(
         f"Stamped migration state to {target.migration_id} step {target.step}: "
         f"{target.name}"
     )

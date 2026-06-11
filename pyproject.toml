@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "causeway"
-version = "0.3.0"
+version = "0.4.0"
 description = "Database-agnostic migration system for Python"
 requires-python = ">=3.12"
 dependencies = ["pydantic>=2.0"]
